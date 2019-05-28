@@ -43,7 +43,15 @@ cd kafka
 bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic test.test --from-beginning
 ```
 
-#### setup route81
+#### run a release version of route81
+
+The easiest way to run route81 is via docker.
+
+```
+docker run --rm --net=host rwynn/route81:1.0.1
+```
+
+#### build yourself and run route81 (optional)
 
 route81 uses the [confluent go driver](https://github.com/confluentinc/confluent-kafka-go) for Kafka. This 
 driver wraps the C client [librdkafka](https://github.com/edenhill/librdkafka).  You will need to follow the instructions
@@ -65,7 +73,7 @@ via Docker. The Docker build handles building and installing route81 with librdk
 ```
 cd route81/docker/release/
 ./build.sh
-docker run --rm --net=host rwynn/route81:1.0.0
+docker run --rm --net=host rwynn/route81:1.0.1
 ```
 
 #### publish MongoDB data to Kafka
@@ -88,6 +96,79 @@ rs1:PRIMARY>
 
 As you perform these operations you should see a log of them being produced to Kafka in your 
 kafka-console-consumer.sh terminal window.
+
+### example messages
+
+#### insert operation
+
+When you insert a document into MongoDB
+
+```
+rs1:PRIMARY> db.test.insert({foo: 1});
+```
+
+You can expect a message like the following in Kafka in topic `test.test`
+
+```json
+{"meta":{"_id":"5ced395f6ad5d6d2233c6dc4","ts":{"T":1559050591,"I":2},"ns":"test.test","op":"i"},"data":{"_id":"5ced395f6ad5d6d2233c6dc4","foo":1}}
+```
+
+#### update operation
+
+When you update a document into MongoDB
+
+```
+rs1:PRIMARY> db.test.update({}, {$unset: {foo:1}, $set: {bar:1}}, {multi:true});
+```
+
+You can expect a message like the following in Kafka in topic `test.test`
+
+```json
+{"meta":{"_id":"5ced395f6ad5d6d2233c6dc4","ts":{"T":1559050762,"I":1},"ns":"test.test","op":"u","updates":{"changed":{"bar":1},"removed":["foo"]}},"data":{"_id":"5ced395f6ad5d6d2233c6dc4","bar":1}}
+```
+
+#### remove operation
+
+When you remove a document into MongoDB
+
+```
+rs1:PRIMARY> db.test.remove({});
+```
+
+You can expect a message like the following in Kafka in topic `test.test`
+
+```json
+{"meta":{"_id":"5ced395f6ad5d6d2233c6dc4","ts":{"T":1559050865,"I":1},"ns":"test.test","op":"d"}}
+```
+
+#### GridFS operation
+
+When you upload a file using GridFS
+
+```
+$ echo 'hello world' > test.txt
+$ base64 test.txt
+aGVsbG8gd29ybGQK
+$ mongofiles -d test put test.txt
+2019-05-28T13:52:30.807+0000    connected to: localhost
+2019-05-28T13:52:30.807+0000    added file: test.txt
+```
+
+You can expect 1 message Kafka for each file in topic `test.fs.files`
+
+```json
+{"meta":{"_id":"5ced3d1e6362390fb7743860","ts":{"T":1559051550,"I":4},"ns":"test.fs.files","op":"i"},"data":{"_id":"5ced3d1e6362390fb7743860","chunkSize":261120,"filename":"test.txt","length":12,"md5":"6f5902ac237024bdd0c176cb93063dc4","uploadDate":"2019-05-28T13:52:30.832Z"}}
+```
+
+You can also expect 1 or more messages in Kafka for the chunks in each file in topic `test.fs.chunks`
+
+```json
+{"meta":{"_id":"5ced3d1e6362390fb7743861","ts":{"T":1559051550,"I":2},"ns":"test.fs.chunks","op":"i"},"data":{"_id":"5ced3d1e6362390fb7743861","data":{"Subtype":0,"Data":"aGVsbG8gd29ybGQK"},"files_id":"5ced3d1e6362390fb7743860","n":0}}
+```
+
+Notice that the chunk data is sent to Kafka base64 encoded. Since only 1 chunk was sent the value matches the input base64.
+
+The chunk parent file `_id` is captured in the field `files_id`.
 
 ### configure route81
 
