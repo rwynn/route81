@@ -10,7 +10,7 @@ require (
 	github.com/google/go-cmp v0.3.0 // indirect
 	github.com/minio/highwayhash v1.0.0 // indirect
 	github.com/pkg/errors v0.8.1 // indirect
-	github.com/rwynn/gtm v0.0.0-20190525195920-6fac56b3af7b
+	github.com/rwynn/gtm v0.0.0-20190528020459-26a133b33a61
 	github.com/serialx/hashring v0.0.0-20190515033939-7706f26af194 // indirect
 	github.com/stretchr/testify v1.3.0 // indirect
 	github.com/tidwall/pretty v0.0.0-20190325153808-1166b9ac2b65 // indirect
