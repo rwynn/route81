@@ -66,16 +66,22 @@ type kafkaMessageMeta struct {
 }
 
 type kafkaSettings struct {
-	EnableIdempotence bool   `toml:"enable-idempotence" json:"enable-idempotence"`
-	RequestTimeoutMs  int    `toml:"request-timeout-ms" json:"request-timeout-ms"`
-	MessageTimeoutMs  int    `toml:"message-timeout-ms" json:"message-timeout-ms"`
-	MessageMaxRetries int    `toml:"message-max-retries" json:"message-max-retries"`
-	RetryBackoffMs    int    `toml:"retry-backoff-ms" json:"retry-backoff-ms"`
-	SecurityProto     string `toml:"security-protocol" json:"security-protocol"`
-	SSLCAFile         string `toml:"ssl-ca-location" json:"ssl-ca-location"`
-	SSLCertFile       string `toml:"ssl-certificate-location" json:"ssl-certificate-location"`
-	SSLKeyFile        string `toml:"ssl-key-location" json:"ssl-key-location"`
-	SSLKeyPass        string `toml:"ssl-key-password" json:"ssl-key-password"`
+	EnableIdempotence     bool   `toml:"enable-idempotence" json:"enable-idempotence"`
+	RequestTimeoutMs      int    `toml:"request-timeout-ms" json:"request-timeout-ms"`
+	MessageTimeoutMs      int    `toml:"message-timeout-ms" json:"message-timeout-ms"`
+	MessageMaxRetries     int    `toml:"message-max-retries" json:"message-max-retries"`
+	RetryBackoffMs        int    `toml:"retry-backoff-ms" json:"retry-backoff-ms"`
+	SecurityProto         string `toml:"security-protocol" json:"security-protocol"`
+	SSLCAFile             string `toml:"ssl-ca-location" json:"ssl-ca-location"`
+	SSLCertFile           string `toml:"ssl-certificate-location" json:"ssl-certificate-location"`
+	SSLKeyFile            string `toml:"ssl-key-location" json:"ssl-key-location"`
+	SSLKeyPass            string `toml:"ssl-key-password" json:"ssl-key-password"`
+	BrokerVersionFallback string `toml:"broker-version-fallback" json:"broker-version-fallback"`
+	APIVersionFallback    bool   `toml:"api-version-fallback" json:"api-version-fallback"`
+	APIVersionFallbackMs  int    `toml:"api-version-fallback-ms" json:"api-version-fallback-ms"`
+	SASLMechanisms        string `toml:"sasl-mechanisms" json:"sasl-mechanisms"`
+	SASLUser              string `toml:"sasl-username" json:"sasl-username"`
+	SASLPass              string `toml:"sasl-password" json:"sasl-password"`
 }
 
 type config struct {
@@ -991,6 +997,21 @@ func withProducerSettings(conf *config) *kafka.ConfigMap {
 	}
 	if ksets.SSLKeyPass != "" {
 		cm.SetKey("ssl.key.password", ksets.SSLKeyPass)
+	}
+	if ksets.BrokerVersionFallback != "" {
+		cm.SetKey("broker.version.fallback", ksets.BrokerVersionFallback)
+	}
+	if ksets.APIVersionFallback {
+		cm.SetKey("api.version.fallback.ms", ksets.APIVersionFallbackMs)
+	}
+	if ksets.SASLMechanisms != "" {
+		cm.SetKey("sasl.mechanisms", ksets.SASLMechanisms)
+	}
+	if ksets.SASLUser != "" {
+		cm.SetKey("sasl.username", ksets.SASLUser)
+	}
+	if ksets.SASLPass != "" {
+		cm.SetKey("sasl.password", ksets.SASLPass)
 	}
 	return cm
 }

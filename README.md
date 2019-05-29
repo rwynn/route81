@@ -246,3 +246,31 @@ ssl-key-password = "abcdefgh"
 ```
 route81 -f /path/to/above.toml
 ```
+
+### confluent cloud
+
+Auto-creation of topics is disabled in Confluent Cloud.  You need to pre-create topics for each MongoDB
+namespace that route81 sends messages for.
+
+```
+$ ccloud topic create mydb.mycol
+```
+
+If you set a `topic-prefix`. e.g. `route81` then you would need to include that prefix in each topic name
+
+```
+$ ccloud topic create route81.mydb.mycol
+```
+
+You also need to provide kafka settings specific to your Confluent Cloud account.
+
+```
+[kafa-settings]
+broker-version-fallback = "0.10.0.0"
+api-version-fallback = true
+api-version-fallback-ms = 0
+sasl-mechanisms = "PLAIN"
+security-protocol = "SASL_SSL"
+sasl-username = "<ccloud key>"
+sasl-password = "<ccloud secret>"
+```
