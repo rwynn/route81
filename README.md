@@ -48,7 +48,7 @@ bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic test.tes
 The easiest way to run route81 is via docker.
 
 ```
-docker run --rm --net=host rwynn/route81:1.0.1
+docker run --rm --net=host rwynn/route81:latest
 ```
 
 #### build yourself and run route81 (optional)
@@ -73,7 +73,7 @@ via Docker. The Docker build handles building and installing route81 with librdk
 ```
 cd route81/docker/release/
 ./build.sh
-docker run --rm --net=host rwynn/route81:1.0.1
+docker run --rm --net=host rwynn/route81:1.0.2
 ```
 
 #### publish MongoDB data to Kafka
