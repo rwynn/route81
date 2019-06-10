@@ -219,6 +219,50 @@ in the collection `route81.resume` in MongoDB.
 route81 -resume
 ```
 
+### pipelines
+
+You can run aggregation pipelines on your change stream or direct reads.  Aggregation pipelines let you
+filter or modify the data that is sent to Kafka.  Pipelines are configured in your TOML file.  For example,
+the following config sets up an aggregation pipeline on the `test.test` collection change streams such that
+only insert events are sent to Kafka.
+
+```toml
+change-stream-namespaces = ["test.test"]
+
+[[pipeline]]
+namespace = "test.test"
+direct = false
+stages = """
+[ { "$match" : { "operationType": "insert" } } ]
+"""
+```
+
+You can have up to 2 pipelines per MongoDB namespace.  If `direct` is false the pipeline will be applied to 
+the change stream on the namespace.  If `direct` is true the pipeline with be applied to direct reads of the
+namespace.
+
+The stages you configure will differ between direct and indirect.  Direct stages will be run directly
+against the docs from the MongoDB namespace.  Indirect stages will be run against the stream of change events
+for the namespace.  The format of a stream of change events are documented
+[here](https://docs.mongodb.com/manual/reference/change-events/#change-stream-output).
+
+By default, route81 runs with `change-stream-namespaces` set to empty string.  This means that all changes from
+your MongoDB deployment will be sent to Kafka.  However, when using pipelines you will want to override
+the default behavior and enumerate the list of `change-stream-namespaces` in the config as shown above.
+This allows you to assign a pipeline to individual collections.
+
+All change streams are run the lookup option set. This means that for inserts and update you can rely on the
+`fullDocument` field to be present in the change event.
+
+If you want to run a pipeline over all change events then you would configure as follows:
+
+```toml
+[[pipeline]]
+stages = """
+[ { "$match" : { "operationType": "insert" } } ]
+"""
+```
+
 ### configure advanced kafka producer settings
 
 For the advanced kafka settings you will need a config file.  For example,

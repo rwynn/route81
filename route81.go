@@ -84,6 +84,13 @@ type kafkaSettings struct {
 	SASLPass              string `toml:"sasl-password" json:"sasl-password"`
 }
 
+type pipeline struct {
+	Namespace string `toml:"namespace" json:"namespace"`
+	Direct    bool   `toml:"direct" json:"direct"`
+	Stages    string `toml:"stages" json:"stages"`
+	stagesVal []interface{}
+}
+
 type config struct {
 	ConfigFile           string        `json:"config-file"`
 	MongoURI             string        `toml:"mongo" json:"mongo"`
@@ -105,6 +112,8 @@ type config struct {
 	EnableHTTPServer     bool          `toml:"http-server" json:"http-server"`
 	HTTPServerAddr       string        `toml:"http-server-addr" json:"http-server-addr"`
 	Pprof                bool          `toml:"pprof" json:"pprof"`
+	Pipelines            []pipeline    `toml:"pipeline" json:"pipelines"`
+	pipe                 map[string][]pipeline
 	viewConfig           bool
 }
 
@@ -126,6 +135,24 @@ func (c *config) nsFilter() gtm.OpFilter {
 	db := c.MetadataDB
 	return func(op *gtm.Op) bool {
 		return op.GetDatabase() != db
+	}
+}
+
+func (c *config) makePipe() gtm.PipelineBuilder {
+	if len(c.pipe) == 0 {
+		return nil
+	}
+	return func(ns string, stream bool) ([]interface{}, error) {
+		lines := c.pipe[ns]
+		if lines == nil {
+			return nil, nil
+		}
+		for _, line := range lines {
+			if stream == !line.Direct {
+				return line.stagesVal, nil
+			}
+		}
+		return nil, nil
 	}
 }
 
@@ -245,6 +272,19 @@ func (c *config) override(fc *config) {
 	}
 	if !c.hasFlag("direct-read-concur") && fc.DirectReadConcur != 0 {
 		c.DirectReadConcur = fc.DirectReadConcur
+	}
+	if len(fc.Pipelines) > 0 {
+		c.Pipelines = fc.Pipelines
+		c.pipe = make(map[string][]pipeline)
+		for _, p := range fc.Pipelines {
+			err := json.Unmarshal([]byte(p.Stages), &p.stagesVal)
+			if err != nil {
+				errorLog.Fatalf("Configuration failed: invalid pipeline stages: %s: %s",
+					p.Stages, err)
+			}
+			pipes := c.pipe[p.Namespace]
+			c.pipe[p.Namespace] = append(pipes, p)
+		}
 	}
 	c.KafkaSettings = fc.KafkaSettings
 }
@@ -1078,6 +1118,7 @@ func startReads(client *mongo.Client, conf *config) *gtm.OpCtx {
 	ctx := gtm.Start(client, &gtm.Options{
 		After:              conf.resumeFunc(),
 		NamespaceFilter:    conf.nsFilter(),
+		Pipe:               conf.makePipe(),
 		ChangeStreamNs:     conf.ChangeStreamNs,
 		DirectReadNs:       conf.DirectReadNs,
 		DirectReadConcur:   conf.DirectReadConcur,
