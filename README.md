@@ -1,6 +1,6 @@
 # route81
 
-Continuously send your MongoDB data stream to Kafka
+A bi-directional sync daemon for MongoDB and Kafka
 
 ### running route81
 
@@ -76,7 +76,7 @@ cd route81/docker/release/
 docker run --rm --net=host rwynn/route81:1.0.2
 ```
 
-#### publish MongoDB data to Kafka
+### produce MongoDB data to Kafka topics
 
 At this point route81 should have connected to a MongoDB replica set on localhost. You can then use route81
 to publish data into the `test.test` topic by interacting with the `test` collection of the `test` database in 
@@ -97,7 +97,13 @@ rs1:PRIMARY>
 As you perform these operations you should see a log of them being produced to Kafka in your 
 kafka-console-consumer.sh terminal window.
 
-### example messages
+### example producer messages
+
+When acting as a message producer to Kafka, or connector source, route81 sends all messages as
+[MongoDB Extended JSON](https://docs.mongodb.com/manual/reference/mongodb-extended-json/). 
+This ensures that receivers are able to easily decode all possible MongoDB data types.
+
+The following examples show how these outgoing messages are formatted for various operations.
 
 #### insert operation
 
@@ -110,12 +116,12 @@ rs1:PRIMARY> db.test.insert({foo: 1});
 You can expect a message like the following in Kafka in topic `test.test`
 
 ```json
-{"meta":{"_id":"5ced395f6ad5d6d2233c6dc4","ts":{"T":1559050591,"I":2},"ns":"test.test","op":"i"},"data":{"_id":"5ced395f6ad5d6d2233c6dc4","foo":1}}
+{"meta":{"_id":{"$oid":"5d06efb2a23fda147d0428da"},"ts":{"$timestamp":{"t":1560735666,"i":1}},"ns":"test.test","op":"i"},"data":{"_id":{"$oid":"5d06efb2a23fda147d0428da"},"foo":{"$numberDouble":"1.0"}}}
 ```
 
 #### update operation
 
-When you update a document into MongoDB
+When you update a document in MongoDB
 
 ```
 rs1:PRIMARY> db.test.update({}, {$unset: {foo:1}, $set: {bar:1}}, {multi:true});
@@ -124,12 +130,12 @@ rs1:PRIMARY> db.test.update({}, {$unset: {foo:1}, $set: {bar:1}}, {multi:true});
 You can expect a message like the following in Kafka in topic `test.test`
 
 ```json
-{"meta":{"_id":"5ced395f6ad5d6d2233c6dc4","ts":{"T":1559050762,"I":1},"ns":"test.test","op":"u","updates":{"changed":{"bar":1},"removed":["foo"]}},"data":{"_id":"5ced395f6ad5d6d2233c6dc4","bar":1}}
+{"meta":{"_id":{"$oid":"5d06efb2a23fda147d0428da"},"ts":{"$timestamp":{"t":1560735836,"i":5}},"ns":"test.test","op":"u","updates":{"removed":["foo"],"changed":{"bar":{"$numberDouble":"1.0"}}}},"data":{"_id":{"$oid":"5d06efb2a23fda147d0428da"},"bar":{"$numberDouble":"1.0"}}}
 ```
 
 #### remove operation
 
-When you remove a document into MongoDB
+When you remove a document from MongoDB
 
 ```
 rs1:PRIMARY> db.test.remove({});
@@ -138,7 +144,7 @@ rs1:PRIMARY> db.test.remove({});
 You can expect a message like the following in Kafka in topic `test.test`
 
 ```json
-{"meta":{"_id":"5ced395f6ad5d6d2233c6dc4","ts":{"T":1559050865,"I":1},"ns":"test.test","op":"d"}}
+{"meta":{"_id":{"$oid":"5d06efb2a23fda147d0428da"},"ts":{"$timestamp":{"t":1560735925,"i":5}},"ns":"test.test","op":"d"}}
 ```
 
 #### GridFS operation
@@ -154,16 +160,16 @@ $ mongofiles -d test put test.txt
 2019-05-28T13:52:30.807+0000    added file: test.txt
 ```
 
-You can expect 1 message Kafka for each file in topic `test.fs.files`
+You can expect 1 message in Kafka for each file in topic `test.fs.files`
 
 ```json
-{"meta":{"_id":"5ced3d1e6362390fb7743860","ts":{"T":1559051550,"I":4},"ns":"test.fs.files","op":"i"},"data":{"_id":"5ced3d1e6362390fb7743860","chunkSize":261120,"filename":"test.txt","length":12,"md5":"6f5902ac237024bdd0c176cb93063dc4","uploadDate":"2019-05-28T13:52:30.832Z"}}
+{"meta":{"_id":{"$oid":"5d06f146636239111ef90bfa"},"ts":{"$timestamp":{"t":1560736070,"i":4}},"ns":"test.fs.files","op":"i"},"data":{"_id":{"$oid":"5d06f146636239111ef90bfa"},"chunkSize":{"$numberInt":"261120"},"uploadDate":{"$date":{"$numberLong":"1560736070080"}},"length":{"$numberInt":"12"},"md5":"6f5902ac237024bdd0c176cb93063dc4","filename":"test.txt"}}
 ```
 
 You can also expect 1 or more messages in Kafka for the chunks in each file in topic `test.fs.chunks`
 
 ```json
-{"meta":{"_id":"5ced3d1e6362390fb7743861","ts":{"T":1559051550,"I":2},"ns":"test.fs.chunks","op":"i"},"data":{"_id":"5ced3d1e6362390fb7743861","data":{"Subtype":0,"Data":"aGVsbG8gd29ybGQK"},"files_id":"5ced3d1e6362390fb7743860","n":0}}
+{"meta":{"_id":{"$oid":"5d06f146636239111ef90bfb"},"ts":{"$timestamp":{"t":1560736070,"i":2}},"ns":"test.fs.chunks","op":"i"},"data":{"_id":{"$oid":"5d06f146636239111ef90bfb"},"files_id":{"$oid":"5d06f146636239111ef90bfa"},"n":{"$numberInt":"0"},"data":{"$binary":{"base64":"aGVsbG8gd29ybGQK","subType":"00"}}}}
 ```
 
 Notice that the chunk data is sent to Kafka base64 encoded. Since only 1 chunk was sent the value matches the input base64.
@@ -263,11 +269,77 @@ stages = """
 """
 ```
 
-### configure advanced kafka producer settings
+### consume MongoDB data from Kafka topics
+
+so far we have examined route81 as a Kafka producer.  route81 can also be used as a Kafka consumer.
+When configured this way route81 will listen on Kafka topics and perform bulk insert/update/delete operations
+on a MongoDB collection with the message data.
+
+route81 consumers are defined in the config file.  You can have multiple consumers. The example below sets up a consumer of the `test.test` topic.
+
+```toml
+[[consumer]]
+namespace = "test.test2"        # the MongoDB collection to apply insert/update/delete operations
+topics = [ "test.test" ]        # a list of Kafka topics to consume events from
+message-format = "json-ext"     # the format of messages on the topics. Supported values are json-ext, json, avro
+document-root-path = "data"     # a gval path to use as the root of the upsert document.  By default the entire message is the root.
+delete-id-path = "meta._id"     # a gval path to the _id when processing a delete operation
+```
+
+With the configuration above, route81 will listen for messages in `json-ext` format on the `test.test` topic.  When the message is read
+route81 will first determine whether to use an upsert or a delete.  In this case the `document-root-path` is set to `data`.  If route81
+finds a value at this path in the message and the value at the path is not an object with an `_id` field only, then route81 will perform
+an upsert with the value at that path.  If route81 does not find a value or the value only has an `_id` field then route81 will perform
+a delete operation.  If the `_id` to delete with is at a different path in the message, then `delete-id-path` can be used to specify where
+to find that `_id`.
+
+The above configuration is designed to match the format that route81 will produce messages to Kafka.  Thus, we can use the above configuration
+to keep the `test.test2` collection in sync in realtime with the `test.test` collection.  When an insert/update/delete operation to `test.test`
+occurs, route81 will first produce a message to the `test.test` topic in Kafka.  Since route81 also has a consumer setup for the `test.test` topic
+it will receive the message back and perform the same operation on the `test.test2` collection.
+
+You can try using the above configuration and interacting with the `test.test` collection in MongoDB.  You should see that updates to `test.test2` 
+collection are performed in sync with the changes.  All of this happens through Kafka.
+
+#### consume avro formatted messages from Kafka
+
+When the consumer message format is avro you will need to set additional properties on the consumer
+
+```toml
+[[consumer]]
+namespace = "test.test2"
+topics = [ "test.test" ]
+message-format = "avro"
+avro-schema-spec = """
+{
+  "type": "record",
+  "name": "LongList",
+  "fields" : [
+    {"name": "next", "type": ["null", "LongList"], "default": null}
+  ]
+}
+"""
+avro-binary = true
+```
+
+`avro-schema-spec` is the avro specification of the data.  `avro-binary` set whether the message is binary or textual avro.
+
+#### additional settings for consumers
+
+You can also set the `bulk-size`, `bulk-flush-duration`, and `workers` properties for a consumer.
+
+```toml
+[[consumer]]
+bulk-size = 1000        # defaults to max 100 messages in a bulk write
+bulk-duration = "10s"   # defaults to 5s before all pending messages will be force flushed
+workers = 8             # defaults to 4 concurrent go routines bulk writing to MongoDB
+```
+
+### configure advanced kafka settings
 
 For the advanced kafka settings you will need a config file.  For example,
 
-```
+```toml
 [kafa-settings]
 enable-idempotence = true
 request-timeout-ms = 10000
@@ -278,7 +350,7 @@ retry-backoff-ms = 50
 
 If you have build librdkafka with SSL support, you can also add
 
-```
+```toml
 [kafa-settings]
 security-protocol = "ssl"
 ssl-ca-location = "ca-cert"
@@ -308,7 +380,7 @@ $ ccloud topic create route81.mydb.mycol
 
 You also need to provide kafka settings specific to your Confluent Cloud account.
 
-```
+```toml
 [kafa-settings]
 broker-version-fallback = "0.10.0.0"
 api-version-fallback = true

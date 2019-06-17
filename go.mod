@@ -4,10 +4,11 @@ go 1.12
 
 require (
 	github.com/BurntSushi/toml v0.3.1
+	github.com/PaesslerAG/gval v1.0.1 // indirect
 	github.com/confluentinc/confluent-kafka-go v1.0.0
 	github.com/go-stack/stack v1.8.0 // indirect
-	github.com/golang/snappy v0.0.1 // indirect
 	github.com/google/go-cmp v0.3.0 // indirect
+	github.com/linkedin/goavro/v2 v2.9.0
 	github.com/minio/highwayhash v1.0.0 // indirect
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/rwynn/gtm v0.0.0-20190528020459-26a133b33a61

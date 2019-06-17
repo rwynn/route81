@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"github.com/BurntSushi/toml"
+	"github.com/PaesslerAG/gval"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/rwynn/gtm"
+	"github.com/rwynn/route81/decoding"
 	"github.com/rwynn/route81/encoding"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
@@ -30,8 +32,10 @@ import (
 )
 
 const (
-	version = "1.0.2"
+	version = "1.0.3"
 )
+
+var supportedConsumerFormats = []string{"json-ext", "json", "avro"}
 
 var (
 	infoLog  = log.New(os.Stderr, "INFO ", log.Flags())
@@ -49,16 +53,16 @@ type producerError struct {
 }
 
 type kafkaMeta struct {
-	Id        string                 `json:"_id,omitempty"`
-	Timestamp primitive.Timestamp    `json:"ts"`
-	Namespace string                 `json:"ns"`
-	Operation string                 `json:"op,omitempty"`
-	Updates   map[string]interface{} `json:"updates,omitempty"`
+	Id        interface{}            `bson:"_id,omitempty" json:"_id,omitempty"`
+	Timestamp primitive.Timestamp    `bson:"ts" json:"ts"`
+	Namespace string                 `bson:"ns" json:"ns"`
+	Operation string                 `bson:"op,omitempty" json:"op,omitempty"`
+	Updates   map[string]interface{} `bson:"updates,omitempty" json:"updates,omitempty"`
 }
 
 type kafkaMessage struct {
-	Meta kafkaMeta              `json:"meta"`
-	Data map[string]interface{} `json:"data,omitempty"`
+	Meta kafkaMeta              `bson:"meta" json:"meta"`
+	Data map[string]interface{} `bson:"data,omitempty" json:"data,omitempty"`
 }
 
 type kafkaMessageMeta struct {
@@ -91,6 +95,22 @@ type pipeline struct {
 	stagesVal []interface{}
 }
 
+type consumer struct {
+	GroupId           string   `toml:"group-id" json:"group-id"`
+	Namespace         string   `toml:"namespace" json:"namespace"`
+	Topics            []string `toml:"topics" json:"topics"`
+	Format            string   `toml:"message-format" json:"message-format"`
+	BulkSize          int      `toml:"bulk-size" json:"bulk-size"`
+	BulkFlushDuration string   `toml:"bulk-flush-duration" json:"bulk-flush-duration"`
+	Workers           int      `toml:"workers" json:"workers"`
+	AvroSchemaSpec    string   `toml:"avro-schema-spec" json:"avro-schema-spec"`
+	AvroBinary        bool     `toml:"avro-binary" json:"avro-binary"`
+	DocRootPath       string   `toml:"document-root-path" json:"document-root-path"`
+	DeleteIDPath      string   `toml:"delete-id-path" json:"delete-id-path"`
+	rootEval          gval.Evaluable
+	deleteEval        gval.Evaluable
+}
+
 type config struct {
 	ConfigFile           string        `json:"config-file"`
 	MongoURI             string        `toml:"mongo" json:"mongo"`
@@ -113,6 +133,7 @@ type config struct {
 	HTTPServerAddr       string        `toml:"http-server-addr" json:"http-server-addr"`
 	Pprof                bool          `toml:"pprof" json:"pprof"`
 	Pipelines            []pipeline    `toml:"pipeline" json:"pipelines"`
+	Consumers            []consumer    `toml:"consumer" json:"consumers"`
 	pipe                 map[string][]pipeline
 	viewConfig           bool
 }
@@ -133,8 +154,19 @@ func (pe *producerError) Error() string {
 
 func (c *config) nsFilter() gtm.OpFilter {
 	db := c.MetadataDB
+	cons := c.Consumers
 	return func(op *gtm.Op) bool {
-		return op.GetDatabase() != db
+		if op.GetDatabase() == db {
+			return false
+		}
+		if len(cons) > 0 {
+			for _, c := range cons {
+				if op.Namespace == c.Namespace {
+					return false
+				}
+			}
+		}
+		return true
 	}
 }
 
@@ -218,6 +250,80 @@ func (c *config) validate() error {
 	return nil
 }
 
+func (c *config) loadPipelines(fc *config) {
+	if len(fc.Pipelines) > 0 {
+		c.Pipelines = fc.Pipelines
+		c.pipe = make(map[string][]pipeline)
+		for _, p := range fc.Pipelines {
+			err := json.Unmarshal([]byte(p.Stages), &p.stagesVal)
+			if err != nil {
+				errorLog.Fatalf("Configuration failed: invalid pipeline stages: %s: %s",
+					p.Stages, err)
+			}
+			pipes := c.pipe[p.Namespace]
+			c.pipe[p.Namespace] = append(pipes, p)
+		}
+	}
+}
+
+func (c *config) loadConsumers(fc *config) {
+	var err error
+	if len(fc.Consumers) > 0 {
+		for _, con := range fc.Consumers {
+			if con.GroupId == "" {
+				con.GroupId = "route81"
+			}
+			if con.Format == "" {
+				con.Format = supportedConsumerFormats[0]
+			} else {
+				supportedFormat := false
+				for _, fmt := range supportedConsumerFormats {
+					if con.Format == fmt {
+						supportedFormat = true
+						break
+					}
+				}
+				if !supportedFormat {
+					errorLog.Fatalf("Configuration failed: unsupported consumer format: %s",
+						con.Format)
+				}
+			}
+			if con.Format == "avro" && con.AvroSchemaSpec == "" {
+				errorLog.Fatalln("Configuration failed: avro-schema-spec is required for the avro format")
+			}
+			if con.BulkSize == 0 {
+				con.BulkSize = 100
+			}
+			if con.BulkFlushDuration == "" {
+				con.BulkFlushDuration = "5s"
+			}
+			if con.Workers == 0 {
+				con.Workers = 4
+			}
+			ns := strings.SplitN(con.Namespace, ".", 2)
+			if len(ns) != 2 {
+				errorLog.Fatalf("Configuration failed: invalid consumer namespace: %s",
+					con.Namespace)
+			}
+			if con.DocRootPath != "" {
+				con.rootEval, err = gval.Full().NewEvaluable(con.DocRootPath)
+				if err != nil {
+					errorLog.Fatalf("Configuration failed: invalid doc root path: %s: %s",
+						con.DocRootPath, err)
+				}
+			}
+			if con.DeleteIDPath != "" {
+				con.deleteEval, err = gval.Full().NewEvaluable(con.DeleteIDPath)
+				if err != nil {
+					errorLog.Fatalf("Configuration failed: invalid delete ID path: %s: %s",
+						con.DeleteIDPath, err)
+				}
+			}
+			c.Consumers = append(c.Consumers, con)
+		}
+	}
+}
+
 func (c *config) override(fc *config) {
 	if !c.hasFlag("mongo") && fc.MongoURI != "" {
 		c.MongoURI = fc.MongoURI
@@ -273,19 +379,8 @@ func (c *config) override(fc *config) {
 	if !c.hasFlag("direct-read-concur") && fc.DirectReadConcur != 0 {
 		c.DirectReadConcur = fc.DirectReadConcur
 	}
-	if len(fc.Pipelines) > 0 {
-		c.Pipelines = fc.Pipelines
-		c.pipe = make(map[string][]pipeline)
-		for _, p := range fc.Pipelines {
-			err := json.Unmarshal([]byte(p.Stages), &p.stagesVal)
-			if err != nil {
-				errorLog.Fatalf("Configuration failed: invalid pipeline stages: %s: %s",
-					p.Stages, err)
-			}
-			pipes := c.pipe[p.Namespace]
-			c.pipe[p.Namespace] = append(pipes, p)
-		}
-	}
+	c.loadPipelines(fc)
+	c.loadConsumers(fc)
 	c.KafkaSettings = fc.KafkaSettings
 }
 
@@ -364,7 +459,19 @@ func loadConfig() (*config, error) {
 	return c, nil
 }
 
-type indexStats struct {
+type clientStats struct {
+	Producer *producerStats `json:"producer"`
+	Consumer *consumerStats `json:"consumer"`
+}
+
+type consumerStats struct {
+	Success    int64 `json:"success"`
+	Failed     int64 `json:"failed"`
+	Queued     int64 `json:"queued"`
+	sync.Mutex `json:"-"`
+}
+
+type producerStats struct {
 	Success    int64 `json:"success"`
 	Failed     int64 `json:"failed"`
 	Inserted   int64 `json:"inserted"`
@@ -390,10 +497,14 @@ type msgClient struct {
 	readC         chan bool
 	readContext   *gtm.OpCtx
 	kafkaServers  string
+	msgEncoder    encoding.MessageEncoder
+	metaEncoder   encoding.MessageEncoder
+	sinks         []*sinkClient
 	stopC         chan bool
 	allWg         *sync.WaitGroup
 	logs          *loggers
-	stats         *indexStats
+	stats         *producerStats
+	statsCons     *consumerStats
 	statsDuration time.Duration
 	timestamp     primitive.Timestamp
 	deliveryC     chan kafka.Event
@@ -401,6 +512,18 @@ type msgClient struct {
 	httpServer    *http.Server
 	respHandlers  int
 	sync.Mutex
+}
+
+type sinkClient struct {
+	msgClient *msgClient
+	consumer  *consumer
+	events    chan kafka.Event
+	decoder   decoding.MessageDecoder
+}
+
+type sinkWorker struct {
+	sinkClient *sinkClient
+	docs       []interface{}
 }
 
 func (args *stringargs) String() string {
@@ -445,10 +568,10 @@ func toDocID(op *gtm.Op, ns bool) string {
 	return id.String()
 }
 
-func (is *indexStats) dup() *indexStats {
+func (is *producerStats) dup() *producerStats {
 	is.Lock()
 	defer is.Unlock()
-	return &indexStats{
+	return &producerStats{
 		Success:  is.Success,
 		Failed:   is.Failed,
 		Inserted: is.Inserted,
@@ -459,43 +582,71 @@ func (is *indexStats) dup() *indexStats {
 	}
 }
 
-func (is *indexStats) addSuccess(count int) {
+func (cs *consumerStats) dup() *consumerStats {
+	cs.Lock()
+	defer cs.Unlock()
+	return &consumerStats{
+		Success: cs.Success,
+		Failed:  cs.Failed,
+		Queued:  cs.Queued,
+	}
+}
+
+func (cs *consumerStats) addSuccess(count int) {
+	cs.Lock()
+	cs.Success += int64(count)
+	cs.Unlock()
+}
+
+func (cs *consumerStats) addFailed(count int) {
+	cs.Lock()
+	cs.Failed += int64(count)
+	cs.Unlock()
+}
+
+func (cs *consumerStats) addQueued(count int) {
+	cs.Lock()
+	cs.Queued += int64(count)
+	cs.Unlock()
+}
+
+func (is *producerStats) addSuccess(count int) {
 	is.Lock()
 	is.Success += int64(count)
 	is.Unlock()
 }
 
-func (is *indexStats) addFailed(count int) {
+func (is *producerStats) addFailed(count int) {
 	is.Lock()
 	is.Failed += int64(count)
 	is.Unlock()
 }
 
-func (is *indexStats) addInserted(count int) {
+func (is *producerStats) addInserted(count int) {
 	is.Lock()
 	is.Inserted += int64(count)
 	is.Unlock()
 }
 
-func (is *indexStats) addUpdated(count int) {
+func (is *producerStats) addUpdated(count int) {
 	is.Lock()
 	is.Updated += int64(count)
 	is.Unlock()
 }
 
-func (is *indexStats) addRemoved(count int) {
+func (is *producerStats) addRemoved(count int) {
 	is.Lock()
 	is.Removed += int64(count)
 	is.Unlock()
 }
 
-func (is *indexStats) addDropped(count int) {
+func (is *producerStats) addDropped(count int) {
 	is.Lock()
 	is.Dropped += int64(count)
 	is.Unlock()
 }
 
-func (is *indexStats) addQueued(count int) {
+func (is *producerStats) addQueued(count int) {
 	is.Lock()
 	is.Queued += int64(count)
 	is.Unlock()
@@ -528,9 +679,36 @@ func newLoggers() *loggers {
 	}
 }
 
+func (mc *msgClient) setSinks(conf *config) *msgClient {
+	var sinks []*sinkClient
+	if len(conf.Consumers) > 0 {
+		for _, c := range conf.Consumers {
+			consumer := &c
+			sink := &sinkClient{
+				msgClient: mc,
+				consumer:  consumer,
+			}
+			switch consumer.Format {
+			case "avro":
+				sink.decoder = &decoding.AvroMessageDecoder{
+					SchemaSpec: consumer.AvroSchemaSpec,
+					Binary:     consumer.AvroBinary,
+				}
+			case "json-ext":
+				sink.decoder = &decoding.JSONExtMessageDecoder{}
+			default:
+				sink.decoder = &decoding.JSONMessageDecoder{}
+			}
+			sinks = append(sinks, sink)
+		}
+	}
+	mc.sinks = sinks
+	return mc
+}
+
 func newMsgClient(client *mongo.Client, producer *kafka.Producer, ctx *gtm.OpCtx, conf *config) *msgClient {
 	statsDuration, _ := time.ParseDuration(conf.StatsDuration)
-	return &msgClient{
+	mc := &msgClient{
 		mongoClient:   client,
 		producer:      producer,
 		config:        conf,
@@ -539,12 +717,17 @@ func newMsgClient(client *mongo.Client, producer *kafka.Producer, ctx *gtm.OpCtx
 		allWg:         &sync.WaitGroup{},
 		stopC:         make(chan bool),
 		kafkaServers:  conf.KafkaServers,
+		msgEncoder:    &encoding.JSONExtMessageEncoder{},
+		metaEncoder:   &encoding.JSONMessageEncoder{},
 		logs:          newLoggers(),
-		stats:         &indexStats{},
+		stats:         &producerStats{},
+		statsCons:     &consumerStats{},
 		statsDuration: statsDuration,
 		deliveryC:     make(chan (kafka.Event), 1000),
 		respHandlers:  4,
 	}
+	mc.setSinks(conf)
+	return mc
 }
 
 func (mc *msgClient) sigListen() {
@@ -564,7 +747,12 @@ func (mc *msgClient) sigListen() {
 }
 
 func (mc *msgClient) logStats() {
-	stats := mc.stats.dup()
+	producerStats := mc.stats.dup()
+	consumerStats := mc.statsCons.dup()
+	stats := &clientStats{
+		Producer: producerStats,
+		Consumer: consumerStats,
+	}
 	if b, err := json.Marshal(stats); err == nil {
 		mc.logs.statsLog.Println(string(b))
 	}
@@ -729,11 +917,17 @@ func (mc *msgClient) buildServer() {
 	})
 	if !mc.config.DisableStats {
 		mux.HandleFunc("/stats", func(w http.ResponseWriter, req *http.Request) {
-			stats, err := json.MarshalIndent(mc.stats.dup(), "", "    ")
+			producerStats := mc.stats.dup()
+			consumerStats := mc.statsCons.dup()
+			stats := &clientStats{
+				Producer: producerStats,
+				Consumer: consumerStats,
+			}
+			statsJson, err := json.MarshalIndent(stats, "", "    ")
 			if err == nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(200)
-				w.Write(stats)
+				w.Write(statsJson)
 			} else {
 				w.WriteHeader(500)
 				fmt.Fprintf(w, "Unable to print statistics: %s", err)
@@ -755,9 +949,233 @@ func (mc *msgClient) buildServer() {
 	mc.httpServer = s
 }
 
+func (sc *sinkClient) messageDoc(m *kafka.Message) (interface{}, error) {
+	var err error
+	var doc interface{}
+	if doc, err = sc.decoder.Decode(m.Value); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+func (sw *sinkWorker) queueMessage(e kafka.Event) {
+	sc := sw.sinkClient
+	mc := sc.msgClient
+	stats := mc.statsCons
+	logs := mc.logs
+	switch ev := e.(type) {
+	case *kafka.Message:
+		var err error
+		if err = ev.TopicPartition.Error; err != nil {
+			logs.errorLog.Println(err)
+			return
+		}
+		var doc interface{}
+		if doc, err = sc.messageDoc(ev); err != nil {
+			logs.errorLog.Println(err)
+			stats.addFailed(1)
+			return
+		}
+		sw.docs = append(sw.docs, doc)
+		stats.addQueued(1)
+		if sw.full() {
+			sw.flush()
+		}
+	case kafka.Error:
+		logs.errorLog.Println(ev)
+	}
+}
+
+func (sw *sinkWorker) isUpsert(doc interface{}) bool {
+	t, _ := sw.transform(doc)
+	if t == nil {
+		return false
+	}
+	if m, ok := t.(map[string]interface{}); ok {
+		if len(m) == 1 && m["_id"] != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func (sw *sinkWorker) transform(doc interface{}) (result interface{}, err error) {
+	sc := sw.sinkClient
+	c := sc.consumer
+	result = doc
+	if c.rootEval != nil {
+		if result, err = c.rootEval(context.Background(), doc); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (sw *sinkWorker) deleteFilter(doc interface{}) (bson.M, error) {
+	sc := sw.sinkClient
+	c := sc.consumer
+	if c.deleteEval != nil {
+		id, err := c.deleteEval(context.Background(), doc)
+		if err != nil {
+			return nil, err
+		}
+		return bson.M{"_id": id}, nil
+	}
+	if m, ok := doc.(map[string]interface{}); ok {
+		if id := m["_id"]; id != nil {
+			return bson.M{"_id": m["_id"]}, nil
+		}
+	}
+	return nil, fmt.Errorf("Unable to extract _id from %v", doc)
+}
+
+func (sw *sinkWorker) replaceFilter(doc interface{}) (result interface{}, err error) {
+	if m, ok := doc.(map[string]interface{}); ok {
+		if id := m["_id"]; id != nil {
+			return bson.M{"_id": m["_id"]}, nil
+		}
+	}
+	return nil, fmt.Errorf("Unable to extract _id from %v", doc)
+}
+
+func (sw *sinkWorker) flush() {
+	if sw.empty() {
+		return
+	}
+	defer sw.drain()
+	sc := sw.sinkClient
+	mc := sc.msgClient
+	stats := mc.statsCons
+	defer stats.addQueued(-1 * len(sw.docs))
+	logs := mc.logs
+	c := sc.consumer
+	ns := strings.SplitN(c.Namespace, ".", 2)
+	db, collection := ns[0], ns[1]
+	client := mc.mongoClient
+	col := client.Database(db).Collection(collection)
+	bwo := options.BulkWrite()
+	bwo.SetOrdered(false)
+	var models []mongo.WriteModel
+	for _, doc := range sw.docs {
+		if sw.isUpsert(doc) {
+			if replacement, err := sw.transform(doc); err == nil {
+				filter, err := sw.replaceFilter(replacement)
+				if err == nil {
+					model := mongo.NewReplaceOneModel()
+					model.SetUpsert(true)
+					model.SetFilter(filter)
+					model.SetReplacement(replacement)
+					models = append(models, model)
+				} else {
+					logs.errorLog.Printf("Message transform failed: %s", err)
+					stats.addFailed(1)
+				}
+			} else {
+				logs.errorLog.Printf("Message transform failed: %s", err)
+				stats.addFailed(1)
+			}
+		} else {
+			filter, err := sw.deleteFilter(doc)
+			if err == nil {
+				model := mongo.NewDeleteOneModel()
+				model.SetFilter(filter)
+				models = append(models, model)
+			} else {
+				logs.errorLog.Printf("Message transform failed: %s", err)
+				stats.addFailed(1)
+			}
+		}
+	}
+	if _, err := col.BulkWrite(context.Background(), models, bwo); err != nil {
+		logs.errorLog.Println(err)
+		if bwe, ok := err.(mongo.BulkWriteException); ok {
+			werrs := len(bwe.WriteErrors)
+			stats.addFailed(werrs)
+			stats.addSuccess(len(sw.docs) - werrs)
+		} else {
+			stats.addFailed(len(sw.docs))
+		}
+	} else {
+		stats.addSuccess(len(sw.docs))
+	}
+}
+
+func (sw *sinkWorker) drain() {
+	sw.docs = nil
+}
+
+func (sw *sinkWorker) empty() bool {
+	return len(sw.docs) == 0
+}
+
+func (sw *sinkWorker) full() bool {
+	c := sw.sinkClient.consumer
+	return len(sw.docs) >= c.BulkSize
+}
+
+func (sc *sinkClient) consumerSettings() *kafka.ConfigMap {
+	mc := sc.msgClient
+	config := mc.config
+	c := sc.consumer
+	cm := &kafka.ConfigMap{
+		"bootstrap.servers":        config.KafkaServers,
+		"group.id":                 c.GroupId,
+		"auto.offset.reset":        "earliest",
+		"go.events.channel.enable": true,
+	}
+	withKafkaSettings(cm, config)
+	return cm
+}
+
+func (sc *sinkClient) startWorkers() {
+	mc := sc.msgClient
+	c := sc.consumer
+	cons, err := kafka.NewConsumer(sc.consumerSettings())
+	if err != nil {
+		mc.logs.errorLog.Println(err)
+		return
+	}
+	cons.SubscribeTopics(c.Topics, nil)
+	sc.events = cons.Events()
+	for i := 0; i < c.Workers; i++ {
+		sw := &sinkWorker{sinkClient: sc}
+		go sw.readMessages()
+	}
+}
+
+func (sw *sinkWorker) readMessages() {
+	sc := sw.sinkClient
+	mc := sc.msgClient
+	c := sc.consumer
+	flushDur, _ := time.ParseDuration(c.BulkFlushDuration)
+	flushT := time.NewTicker(flushDur)
+	defer flushT.Stop()
+	defer sw.drain()
+	done := false
+	for !done {
+		select {
+		case <-flushT.C:
+			sw.flush()
+		case e := <-sc.events:
+			sw.queueMessage(e)
+		case <-mc.stopC:
+			done = true
+		}
+	}
+}
+
+func (mc *msgClient) startSinks() {
+	if len(mc.sinks) > 0 {
+		for _, s := range mc.sinks {
+			go s.startWorkers()
+		}
+	}
+}
+
 func (mc *msgClient) eventLoop() {
 	go mc.serveHttp()
 	go mc.sigListen()
+	go mc.startSinks()
 	go mc.readListen()
 	go mc.statsLoop()
 	mc.startResponseHandlers()
@@ -806,7 +1224,7 @@ func (mc *msgClient) stop() {
 
 func (mc *msgClient) recordSuccessTs(ev *kafka.Message) error {
 	var mess kafkaMessageMeta
-	if err := json.Unmarshal(ev.Value, &mess); err != nil {
+	if err := bson.UnmarshalExtJSON(ev.Value, true, &mess); err != nil {
 		return err
 	}
 	mc.setTimestamp(mess.Meta.Timestamp)
@@ -816,7 +1234,7 @@ func (mc *msgClient) recordSuccessTs(ev *kafka.Message) error {
 func (mc *msgClient) enrichError(ev *kafka.Message) error {
 	var op *gtm.Op
 	var mess kafkaMessageMeta
-	if err := json.Unmarshal(ev.Value, &mess); err == nil {
+	if err := bson.UnmarshalExtJSON(ev.Value, true, &mess); err == nil {
 		op = &gtm.Op{
 			Id:        mess.Meta.Id,
 			Namespace: mess.Meta.Namespace,
@@ -860,11 +1278,7 @@ func (mc *msgClient) addEventType(op *gtm.Op) {
 }
 
 func (mc *msgClient) getMsgData(op *gtm.Op) map[string]interface{} {
-	var data map[string]interface{}
-	if op.Data != nil {
-		data = encoding.ConvertMapForJSON(op.Data)
-	}
-	return data
+	return op.Data
 }
 
 func (mc *msgClient) getMsgUpdates(op *gtm.Op) map[string]interface{} {
@@ -894,19 +1308,25 @@ func (mc *msgClient) getMsgTopic(op *gtm.Op) string {
 	return sb.String()
 }
 
-func (mc *msgClient) getMsgId(op *gtm.Op) string {
+func (mc *msgClient) getMsgId(op *gtm.Op) []byte {
+	enc := mc.metaEncoder
 	if op.IsCommand() {
-		return ""
+		value, _ := enc.Encode("")
+		return value
 	}
-	return toDocID(op, false)
+	value, _ := enc.Encode(op.Id)
+	return value
 }
 
-func (mc *msgClient) getMsgKey(op *gtm.Op) string {
+func (mc *msgClient) getMsgKey(op *gtm.Op) []byte {
+	enc := mc.metaEncoder
 	if op.IsCommand() {
 		if _, drop := op.IsDropDatabase(); drop {
-			return op.GetDatabase()
+			value, _ := enc.Encode(op.GetDatabase())
+			return value
 		}
-		return op.Namespace
+		value, _ := enc.Encode(op.Namespace)
+		return value
 	}
 	return mc.getMsgId(op)
 }
@@ -919,17 +1339,18 @@ func (mc *msgClient) getMsgOperation(op *gtm.Op) string {
 }
 
 func (mc *msgClient) getMsgHeaders(op *gtm.Op) ([]kafka.Header, error) {
-	ts, err := json.Marshal(op.Timestamp)
+	enc := mc.metaEncoder
+	ts, err := enc.Encode(op.Timestamp)
 	if err != nil {
 		return nil, err
 	}
 	headers := []kafka.Header{
-		{"ts", []byte(ts)},
+		{"ts", ts},
 		{"ns", []byte(op.Namespace)},
 	}
 	if op.IsCommand() == false {
 		id := mc.getMsgId(op)
-		headers = append(headers, kafka.Header{"_id", []byte(id)})
+		headers = append(headers, kafka.Header{"_id", id})
 	}
 	return headers, nil
 }
@@ -937,14 +1358,13 @@ func (mc *msgClient) getMsgHeaders(op *gtm.Op) ([]kafka.Header, error) {
 func (mc *msgClient) send(op *gtm.Op) error {
 	mc.addEventType(op)
 	topic := mc.getMsgTopic(op)
-	id := mc.getMsgId(op)
 	key := mc.getMsgKey(op)
 	operation := mc.getMsgOperation(op)
 	data := mc.getMsgData(op)
 	updates := mc.getMsgUpdates(op)
 	km := kafkaMessage{
 		Meta: kafkaMeta{
-			Id:        id,
+			Id:        op.Id,
 			Timestamp: op.Timestamp,
 			Namespace: op.Namespace,
 			Operation: operation,
@@ -952,7 +1372,8 @@ func (mc *msgClient) send(op *gtm.Op) error {
 		},
 		Data: data,
 	}
-	value, err := json.Marshal(km)
+	enc := mc.msgEncoder
+	value, err := enc.Encode(km)
 	if err != nil {
 		mc.stats.addFailed(1)
 		return &producerError{op: op, err: err}
@@ -964,7 +1385,7 @@ func (mc *msgClient) send(op *gtm.Op) error {
 	}
 	err = mc.producer.Produce(&kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
-		Key:            []byte(key),
+		Key:            key,
 		Value:          value,
 		Headers:        headers,
 	}, mc.deliveryC)
@@ -1003,11 +1424,8 @@ func dialMongo(URI string) (*mongo.Client, error) {
 	return client, nil
 }
 
-func withProducerSettings(conf *config) *kafka.ConfigMap {
+func withKafkaSettings(cm *kafka.ConfigMap, conf *config) {
 	ksets := conf.KafkaSettings
-	cm := &kafka.ConfigMap{
-		"bootstrap.servers": conf.KafkaServers,
-	}
 	if ksets.RequestTimeoutMs != 0 {
 		cm.SetKey("request.timeout.ms", ksets.RequestTimeoutMs)
 	}
@@ -1053,6 +1471,13 @@ func withProducerSettings(conf *config) *kafka.ConfigMap {
 	if ksets.SASLPass != "" {
 		cm.SetKey("sasl.password", ksets.SASLPass)
 	}
+}
+
+func withProducerSettings(conf *config) *kafka.ConfigMap {
+	cm := &kafka.ConfigMap{
+		"bootstrap.servers": conf.KafkaServers,
+	}
+	withKafkaSettings(cm, conf)
 	return cm
 }
 

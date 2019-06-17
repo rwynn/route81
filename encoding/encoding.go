@@ -1,10 +1,65 @@
 package encoding
 
 import (
+	"encoding/json"
 	"fmt"
+	goavro "github.com/linkedin/goavro/v2"
+	"go.mongodb.org/mongo-driver/bson"
 	"math"
 	"time"
 )
+
+type MessageEncoder interface {
+	Encode(interface{}) ([]byte, error)
+}
+
+type JSONMessageEncoder struct{}
+
+func (jme *JSONMessageEncoder) Encode(val interface{}) ([]byte, error) {
+	if m, ok := val.(map[string]interface{}); ok {
+		val = ConvertMapForJSON(m)
+	}
+	b, err := json.Marshal(val)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+type JSONExtMessageEncoder struct{}
+
+func (jme *JSONExtMessageEncoder) Encode(val interface{}) ([]byte, error) {
+	b, err := bson.MarshalExtJSON(val, true, true)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+type AvroMessageEncoder struct {
+	SchemaSpec string
+	Binary     bool
+}
+
+func (ame *AvroMessageEncoder) Encode(val interface{}) ([]byte, error) {
+	codec, err := goavro.NewCodec(ame.SchemaSpec)
+	if err != nil {
+		return nil, err
+	}
+	if ame.Binary {
+		b, err := codec.BinaryFromNative(nil, val)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	} else {
+		b, err := codec.TextualFromNative(nil, val)
+		if err != nil {
+			return nil, err
+		}
+		return b, nil
+	}
+}
 
 const timeJsonFormat = "2006-01-02T15:04:05.000Z07:00"
 
