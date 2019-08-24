@@ -5,18 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/PaesslerAG/gval"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/rwynn/gtm"
-	"github.com/rwynn/route81/decoding"
-	"github.com/rwynn/route81/encoding"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/bsoncodec"
-	"go.mongodb.org/mongo-driver/bson/bsontype"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"io"
 	"log"
 	"net"
@@ -29,10 +17,23 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/PaesslerAG/gval"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/rwynn/gtm"
+	"github.com/rwynn/route81/decoding"
+	"github.com/rwynn/route81/encoding"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/bsoncodec"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
-	version = "1.0.4"
+	version = "1.1.0"
 )
 
 var supportedConsumerFormats = []string{"json-ext", "json", "avro"}
