@@ -55,7 +55,7 @@ docker run --rm --net=host rwynn/route81:latest
 
 route81 uses the [confluent go driver](https://github.com/confluentinc/confluent-kafka-go) for Kafka. This 
 driver wraps the C client [librdkafka](https://github.com/edenhill/librdkafka).  You will need to follow the instructions
-for installing `libdrdkakfa 1.0` on your system as a prerequisite of running route81.
+for installing `libdrdkakfa 1.0` or greater on your system as a prerequisite of running route81.
 
 You may also need the `pkg-config` package to be installed on your system.
 
@@ -73,7 +73,7 @@ via Docker. The Docker build handles building and installing route81 with librdk
 ```
 cd route81/docker/release/
 ./build.sh
-docker run --rm --net=host rwynn/route81:1.0.4
+docker run --rm --net=host rwynn/route81:1.1.0
 ```
 
 ### produce MongoDB data to Kafka topics
