@@ -5,7 +5,7 @@ go 1.12
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/PaesslerAG/gval v1.0.1
-	github.com/confluentinc/confluent-kafka-go v1.0.0
+	github.com/confluentinc/confluent-kafka-go v1.1.0
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/google/go-cmp v0.3.0 // indirect
 	github.com/linkedin/goavro/v2 v2.9.0

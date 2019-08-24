@@ -54,8 +54,13 @@ docker run --rm --net=host rwynn/route81:latest
 #### build yourself and run route81 (optional)
 
 route81 uses the [confluent go driver](https://github.com/confluentinc/confluent-kafka-go) for Kafka. This 
-driver wraps the C client [librdkafka](https://github.com/edenhill/librdkafka).  You will need to follow the instructions
-for installing `libdrdkakfa 1.0` or greater on your system as a prerequisite of running route81.
+driver wraps the C client [librdkafka](https://github.com/edenhill/librdkafka).
+
+You will need to follow the
+[instructions](https://docs.confluent.io/current/installation/installing_cp/deb-ubuntu.html)
+for installing `libdrdkafkfa 1.0` or greater on your system as a prerequisite of running route81.
+
+You may need to try to match the version of librdkafka you install to the one specified in the route81 go.mod file.
 
 You may also need the `pkg-config` package to be installed on your system.
 
