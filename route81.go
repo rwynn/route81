@@ -122,6 +122,7 @@ type config struct {
 	DirectReadNs         stringargs    `toml:"direct-read-namespaces" json:"direct-read-namespaces"`
 	DirectReadSplitMax   int           `toml:"direct-read-split-max" json:"direct-read-split-max"`
 	DirectReadConcur     int           `toml:"direct-read-concur" json:"direct-read-concur"`
+	DisableChangeStream  bool          `toml:"disable-change-stream" json:"disable-change-stream"`
 	FailFast             bool          `toml:"fail-fast" json:"fail-fast"`
 	ExitAfterDirectReads bool          `toml:"exit-after-direct-reads" json:"exit-after-direct-reads"`
 	DisableStats         bool          `toml:"disable-stats" json:"disable-stats"`
@@ -234,7 +235,9 @@ func (c *config) log(out io.Writer) {
 }
 
 func (c *config) setDefaults() *config {
-	if len(c.ChangeStreamNs) == 0 {
+	if c.DisableChangeStream {
+		c.ChangeStreamNs = []string{}
+	} else if len(c.ChangeStreamNs) == 0 {
 		c.ChangeStreamNs = []string{""}
 	}
 	return c
@@ -344,6 +347,9 @@ func (c *config) override(fc *config) {
 	if !c.hasFlag("topic-name-prefix") && fc.TopicPrefix != "" {
 		c.TopicPrefix = fc.TopicPrefix
 	}
+	if fc.DisableChangeStream {
+		c.DisableChangeStream = true
+	}
 	if fc.FailFast {
 		c.FailFast = true
 	}
@@ -409,6 +415,8 @@ func parseFlags() *config {
 		"True to exit the process after the first connection failure")
 	flag.BoolVar(&c.ExitAfterDirectReads, "exit-after-direct-reads", false,
 		"True to exit the process after direct reads have completed")
+	flag.BoolVar(&c.DisableChangeStream, "disable-change-stream", false,
+		"True to disable change events")
 	flag.BoolVar(&c.DisableStats, "disable-stats", false,
 		"True to disable stats")
 	flag.BoolVar(&c.DisableStatsLog, "disable-stats-log", false,
@@ -826,6 +834,7 @@ func (mc *msgClient) saveTimestamp(ts primitive.Timestamp) error {
 }
 
 func (mc *msgClient) timestampLoop() {
+	defer mc.allWg.Done()
 	ticker := time.NewTicker(time.Duration(10) * time.Second)
 	defer ticker.Stop()
 	running := true
@@ -856,11 +865,13 @@ func (mc *msgClient) handleFatalError() {
 
 func (mc *msgClient) startResponseHandlers() {
 	for i := 0; i < mc.respHandlers; i++ {
+		mc.allWg.Add(1)
 		go mc.responseLoop()
 	}
 }
 
 func (mc *msgClient) responseLoop() {
+	defer mc.allWg.Done()
 	running := true
 	for running {
 		select {
@@ -883,6 +894,7 @@ func (mc *msgClient) responseLoop() {
 func (mc *msgClient) metaLoop() {
 	config := mc.config
 	if config.Resume {
+		mc.allWg.Add(1)
 		go mc.timestampLoop()
 	}
 }
@@ -1140,6 +1152,7 @@ func (sc *sinkClient) startWorkers() {
 	sc.events = cons.Events()
 	for i := 0; i < c.Workers; i++ {
 		sw := &sinkWorker{sinkClient: sc}
+		mc.allWg.Add(1)
 		go sw.readMessages()
 	}
 }
@@ -1147,6 +1160,7 @@ func (sc *sinkClient) startWorkers() {
 func (sw *sinkWorker) readMessages() {
 	sc := sw.sinkClient
 	mc := sc.msgClient
+	defer mc.allWg.Done()
 	c := sc.consumer
 	flushDur, _ := time.ParseDuration(c.BulkFlushDuration)
 	flushT := time.NewTicker(flushDur)
@@ -1175,12 +1189,12 @@ func (mc *msgClient) startSinks() {
 
 func (mc *msgClient) eventLoop() {
 	go mc.serveHTTP()
-	go mc.sigListen()
 	go mc.startSinks()
 	go mc.readListen()
 	go mc.statsLoop()
 	mc.startResponseHandlers()
 	mc.metaLoop()
+	go mc.sigListen()
 	ctx := mc.readContext
 	drained := false
 	for {
@@ -1218,9 +1232,11 @@ func (mc *msgClient) setStatsDuration(max time.Duration) *msgClient {
 func (mc *msgClient) stop() {
 	mc.readContext.Stop()
 	<-mc.readC
-	mc.producer.Flush(2000)
 	close(mc.stopC)
 	mc.allWg.Wait()
+	mc.producer.Flush(2000)
+	mc.producer.Close()
+	mc.mongoClient.Disconnect(context.Background())
 }
 
 func (mc *msgClient) recordSuccessTs(ev *kafka.Message) error {
@@ -1569,9 +1585,7 @@ func main() {
 	infoLog.Println("Establishing connection to MongoDB")
 	client = mustConnect(conf)
 	infoLog.Println("Connected to MongoDB")
-	defer client.Disconnect(context.Background())
 	producer = mustProducer(conf)
-	defer producer.Close()
 	ctx := startReads(client, conf)
 	mc := newMsgClient(client, producer, ctx, conf)
 	mc.eventLoop()
