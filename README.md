@@ -78,7 +78,7 @@ via Docker. The Docker build handles building and installing route81 with librdk
 ```
 cd route81/docker/release/
 ./build.sh
-docker run --rm --net=host rwynn/route81:1.1.0
+docker run --rm --net=host rwynn/route81:1.2.0
 ```
 
 ### produce MongoDB data to Kafka topics

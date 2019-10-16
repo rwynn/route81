@@ -3,10 +3,11 @@ package encoding
 import (
 	"encoding/json"
 	"fmt"
-	goavro "github.com/linkedin/goavro/v2"
-	"go.mongodb.org/mongo-driver/bson"
 	"math"
 	"time"
+
+	goavro "github.com/linkedin/goavro/v2"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 type MessageEncoder interface {
@@ -61,7 +62,7 @@ func (ame *AvroMessageEncoder) Encode(val interface{}) ([]byte, error) {
 	}
 }
 
-const timeJsonFormat = "2006-01-02T15:04:05.000Z07:00"
+const timeJSONFormat = "2006-01-02T15:04:05.000Z07:00"
 
 type jsonTime time.Time
 
@@ -72,9 +73,9 @@ func (jt jsonTime) MarshalJSON() ([]byte, error) {
 	if y := t.Year(); y < 0 || y >= 10000 {
 		return []byte("null"), nil
 	}
-	b := make([]byte, 0, len(timeJsonFormat)+2)
+	b := make([]byte, 0, len(timeJSONFormat)+2)
 	b = append(b, '"')
-	b = t.AppendFormat(b, timeJsonFormat)
+	b = t.AppendFormat(b, timeJSONFormat)
 	b = append(b, '"')
 	return b, nil
 }
@@ -93,8 +94,8 @@ func (jf jsonFloat) MarshalJSON() ([]byte, error) {
 }
 
 func convertSliceForJSON(a []interface{}) []interface{} {
-	var avs []interface{}
-	for _, av := range a {
+	var avs = make([]interface{}, len(a))
+	for i, av := range a {
 		var avc interface{}
 		switch achild := av.(type) {
 		case map[string]interface{}:
@@ -108,7 +109,7 @@ func convertSliceForJSON(a []interface{}) []interface{} {
 		default:
 			avc = av
 		}
-		avs = append(avs, avc)
+		avs[i] = avc
 	}
 	return avs
 }
