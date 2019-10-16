@@ -54,7 +54,7 @@ type producerError struct {
 }
 
 type kafkaMeta struct {
-	Id        interface{}            `bson:"_id,omitempty" json:"_id,omitempty"`
+	ID        interface{}            `bson:"_id,omitempty" json:"_id,omitempty"`
 	Timestamp primitive.Timestamp    `bson:"ts" json:"ts"`
 	Namespace string                 `bson:"ns" json:"ns"`
 	Operation string                 `bson:"op,omitempty" json:"op,omitempty"`
@@ -97,7 +97,7 @@ type pipeline struct {
 }
 
 type consumer struct {
-	GroupId           string   `toml:"group-id" json:"group-id"`
+	GroupID           string   `toml:"group-id" json:"group-id"`
 	Namespace         string   `toml:"namespace" json:"namespace"`
 	Topics            []string `toml:"topics" json:"topics"`
 	Format            string   `toml:"message-format" json:"message-format"`
@@ -204,7 +204,7 @@ func (c *config) resumeFunc() gtm.TimestampGenerator {
 			if err = result.Decode(&doc); err == nil {
 				if doc["ts"] != nil {
 					ts = doc["ts"].(primitive.Timestamp)
-					ts.I += 1
+					ts.I++
 				}
 			}
 		}
@@ -271,8 +271,8 @@ func (c *config) loadConsumers(fc *config) {
 	var err error
 	if len(fc.Consumers) > 0 {
 		for _, con := range fc.Consumers {
-			if con.GroupId == "" {
-				con.GroupId = "route81"
+			if con.GroupID == "" {
+				con.GroupID = "route81"
 			}
 			if con.Format == "" {
 				con.Format = supportedConsumerFormats[0]
@@ -887,7 +887,7 @@ func (mc *msgClient) metaLoop() {
 	}
 }
 
-func (mc *msgClient) serveHttp() {
+func (mc *msgClient) serveHTTP() {
 	config := mc.config
 	if !config.EnableHTTPServer {
 		return
@@ -924,11 +924,11 @@ func (mc *msgClient) buildServer() {
 				Producer: producerStats,
 				Consumer: consumerStats,
 			}
-			statsJson, err := json.MarshalIndent(stats, "", "    ")
+			statsJSON, err := json.MarshalIndent(stats, "", "    ")
 			if err == nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(200)
-				w.Write(statsJson)
+				w.Write(statsJSON)
 			} else {
 				w.WriteHeader(500)
 				fmt.Fprintf(w, "Unable to print statistics: %s", err)
@@ -1120,7 +1120,7 @@ func (sc *sinkClient) consumerSettings() *kafka.ConfigMap {
 	c := sc.consumer
 	cm := &kafka.ConfigMap{
 		"bootstrap.servers":        config.KafkaServers,
-		"group.id":                 c.GroupId,
+		"group.id":                 c.GroupID,
 		"auto.offset.reset":        "earliest",
 		"go.events.channel.enable": true,
 	}
@@ -1174,7 +1174,7 @@ func (mc *msgClient) startSinks() {
 }
 
 func (mc *msgClient) eventLoop() {
-	go mc.serveHttp()
+	go mc.serveHTTP()
 	go mc.sigListen()
 	go mc.startSinks()
 	go mc.readListen()
@@ -1237,7 +1237,7 @@ func (mc *msgClient) enrichError(ev *kafka.Message) error {
 	var mess kafkaMessageMeta
 	if err := bson.UnmarshalExtJSON(ev.Value, true, &mess); err == nil {
 		op = &gtm.Op{
-			Id:        mess.Meta.Id,
+			Id:        mess.Meta.ID,
 			Namespace: mess.Meta.Namespace,
 			Operation: mess.Meta.Operation,
 		}
@@ -1309,7 +1309,7 @@ func (mc *msgClient) getMsgTopic(op *gtm.Op) string {
 	return sb.String()
 }
 
-func (mc *msgClient) getMsgId(op *gtm.Op) []byte {
+func (mc *msgClient) getMsgID(op *gtm.Op) []byte {
 	enc := mc.metaEncoder
 	if op.IsCommand() {
 		value, _ := enc.Encode("")
@@ -1329,7 +1329,7 @@ func (mc *msgClient) getMsgKey(op *gtm.Op) []byte {
 		value, _ := enc.Encode(op.Namespace)
 		return value
 	}
-	return mc.getMsgId(op)
+	return mc.getMsgID(op)
 }
 
 func (mc *msgClient) getMsgOperation(op *gtm.Op) string {
@@ -1346,12 +1346,12 @@ func (mc *msgClient) getMsgHeaders(op *gtm.Op) ([]kafka.Header, error) {
 		return nil, err
 	}
 	headers := []kafka.Header{
-		{"ts", ts},
-		{"ns", []byte(op.Namespace)},
+		{Key: "ts", Value: ts},
+		{Key: "ns", Value: []byte(op.Namespace)},
 	}
 	if op.IsCommand() == false {
-		id := mc.getMsgId(op)
-		headers = append(headers, kafka.Header{"_id", id})
+		id := mc.getMsgID(op)
+		headers = append(headers, kafka.Header{Key: "_id", Value: id})
 	}
 	return headers, nil
 }
@@ -1365,7 +1365,7 @@ func (mc *msgClient) send(op *gtm.Op) error {
 	updates := mc.getMsgUpdates(op)
 	km := kafkaMessage{
 		Meta: kafkaMeta{
-			Id:        op.Id,
+			ID:        op.Id,
 			Timestamp: op.Timestamp,
 			Namespace: op.Namespace,
 			Operation: operation,
@@ -1384,8 +1384,9 @@ func (mc *msgClient) send(op *gtm.Op) error {
 		mc.stats.addFailed(1)
 		return &producerError{op: op, err: err}
 	}
+	const partAny int32 = kafka.PartitionAny
 	err = mc.producer.Produce(&kafka.Message{
-		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: partAny},
 		Key:            key,
 		Value:          value,
 		Headers:        headers,
