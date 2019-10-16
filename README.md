@@ -345,7 +345,7 @@ workers = 8             # defaults to 4 concurrent go routines bulk writing to M
 For the advanced kafka settings you will need a config file.  For example,
 
 ```toml
-[kafa-settings]
+[kafka-settings]
 enable-idempotence = true
 request-timeout-ms = 10000
 message-timeout-ms = 10000
@@ -356,7 +356,7 @@ retry-backoff-ms = 50
 If you have build librdkafka with SSL support, you can also add
 
 ```toml
-[kafa-settings]
+[kafka-settings]
 security-protocol = "ssl"
 ssl-ca-location = "ca-cert"
 ssl-certificate-location = "client_?????_client.pem"
@@ -386,7 +386,7 @@ $ ccloud topic create route81.mydb.mycol
 You also need to provide kafka settings specific to your Confluent Cloud account.
 
 ```toml
-[kafa-settings]
+[kafka-settings]
 broker-version-fallback = "0.10.0.0"
 api-version-fallback = true
 api-version-fallback-ms = 0
