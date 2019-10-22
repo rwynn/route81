@@ -197,6 +197,19 @@ for security, etc.
 
 For Kafka you can provide a comma separated list of host:port,host:port... for the bootstrap servers.
 
+To use a TOML config file pass the location of the file with the -f flag.
+
+```
+route81 -f /path/to/config.toml"
+```
+
+A very basic TOML config file looks like this:
+
+```toml
+mongo = "mongodb://user:pass@hostname:port"
+kafka = "hostname:9092"
+```
+
 ### configure what gets read and sent from MongoDB to Kafka
 
 By default route81 will open a change stream against the entire MongoDB deployment and send change data as JSON to
@@ -218,6 +231,31 @@ In addition to watching and sending changes in MongoDB to Kafka, you can send en
 
 ```
 direct-read-namespaces = [ "mydb.mycol", "mydb.myview" ]
+```
+
+### sending multiple MongoDB collections to the same Kafka topic
+
+By default, route81 will write data from MongoDB collection db1.col1 to a Kafka topic named db1.col.
+You can override this mapping by providing a `producer-map` setting.  You can have 1 or more `producer-map`
+settings in your config file.  For example, the following configuration will send all data from MongoDB
+database `mydb` to Kafka topic `my-topic` and `anotherdb` to `my-second-topic`.
+
+```toml
+# put these at the end of your config
+[[producer-map]]
+mongo-namespaces = "mydb"
+kafka-topic = "my-topic"
+
+[[producer-map]]
+mongo-namespaces = "anotherdb"
+kafka-topic = "my-second-topic"
+```
+To send all data to the same topic just supply the kafka topic name
+
+```toml
+# put these at the end of your config
+[[producer-map]]
+kafka-topic = "my-catchall-topic"
 ```
 
 ### save and resume your progress across restarts

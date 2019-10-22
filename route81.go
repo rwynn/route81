@@ -112,6 +112,11 @@ type consumer struct {
 	deleteEval        gval.Evaluable
 }
 
+type producerMap struct {
+	MongoNamespace string `toml:"mongo-namespace" json:"mongo-namespace"`
+	KafkaTopicName string `toml:"kafka-topic" json:"kafka-topic"`
+}
+
 type config struct {
 	ConfigFile           string        `json:"config-file"`
 	MongoURI             string        `toml:"mongo" json:"mongo"`
@@ -138,6 +143,7 @@ type config struct {
 	Consumers            []consumer    `toml:"consumer" json:"consumers"`
 	pipe                 map[string][]pipeline
 	viewConfig           bool
+	ProducerMaps         []producerMap `toml:"producer-map" json:"producer-maps"`
 }
 
 func (pe *producerError) Error() string {
@@ -250,6 +256,11 @@ func (c *config) validate() error {
 		}
 	} else {
 		return fmt.Errorf("StatsDuration cannot be empty")
+	}
+	for _, pm := range c.ProducerMaps {
+		if pm.KafkaTopicName == "" {
+			return fmt.Errorf("kafka-topic cannot be empty in a producer-map")
+		}
 	}
 	return nil
 }
@@ -389,6 +400,7 @@ func (c *config) override(fc *config) {
 	c.loadPipelines(fc)
 	c.loadConsumers(fc)
 	c.KafkaSettings = fc.KafkaSettings
+	c.ProducerMaps = fc.ProducerMaps
 }
 
 func mustConfig() *config {
@@ -402,9 +414,10 @@ func mustConfig() *config {
 
 func parseFlags() *config {
 	var c config
-	var v bool
+	var v, help bool
 	flag.BoolVar(&v, "version", false, "Print the version number and exit")
 	flag.BoolVar(&v, "v", false, "Print the version number and exit")
+	flag.BoolVar(&help, "h", false, "Print help and exit")
 	flag.BoolVar(&c.viewConfig, "view-config", false, "Print the configuration and exit")
 	flag.StringVar(&c.ConfigFile, "f", "", "Path to a TOML formatted config file")
 	flag.StringVar(&c.MongoURI, "mongo", "mongodb://localhost:27017",
@@ -446,6 +459,10 @@ func parseFlags() *config {
 	flag.Parse()
 	if v {
 		fmt.Println(version)
+		os.Exit(0)
+	}
+	if help {
+		flag.PrintDefaults()
 		os.Exit(0)
 	}
 	return &c
@@ -1317,11 +1334,19 @@ func (mc *msgClient) getMsgTopic(op *gtm.Op) string {
 		sb.WriteString(conf.TopicPrefix)
 		sb.WriteString(".")
 	}
+	var ns string
 	if _, drop := op.IsDropDatabase(); drop {
-		sb.WriteString(op.GetDatabase())
+		ns = op.GetDatabase()
 	} else {
-		sb.WriteString(op.Namespace)
+		ns = op.Namespace
 	}
+	for _, pm := range conf.ProducerMaps {
+		if pm.MongoNamespace == "" || pm.MongoNamespace == ns || strings.HasPrefix(ns, pm.MongoNamespace) {
+			ns = pm.KafkaTopicName
+			break
+		}
+	}
+	sb.WriteString(ns)
 	return sb.String()
 }
 
