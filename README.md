@@ -243,11 +243,11 @@ database `mydb` to Kafka topic `my-topic` and `anotherdb` to `my-second-topic`.
 ```toml
 # put these at the end of your config
 [[producer-map]]
-mongo-namespaces = "mydb"
+mongo-namespace = "mydb"
 kafka-topic = "my-topic"
 
 [[producer-map]]
-mongo-namespaces = "anotherdb"
+mongo-namespace = "anotherdb"
 kafka-topic = "my-second-topic"
 ```
 To send all data to the same topic just supply the kafka topic name
