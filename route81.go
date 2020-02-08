@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	version = "1.2.0"
+	version = "1.2.1"
 )
 
 var supportedConsumerFormats = []string{"json-ext", "json", "avro"}
