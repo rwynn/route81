@@ -21,7 +21,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/PaesslerAG/gval"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"github.com/rwynn/gtm"
+	"github.com/rwynn/gtm/v2"
 	"github.com/rwynn/route81/decoding"
 	"github.com/rwynn/route81/encoding"
 	"go.mongodb.org/mongo-driver/bson"
