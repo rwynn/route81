@@ -1121,12 +1121,12 @@ func (sw *sinkWorker) flush() {
 		if bwe, ok := err.(mongo.BulkWriteException); ok {
 			werrs := len(bwe.WriteErrors)
 			stats.addFailed(werrs)
-			stats.addSuccess(len(sw.docs) - werrs)
+			stats.addSuccess(len(models) - werrs)
 		} else {
-			stats.addFailed(len(sw.docs))
+			stats.addFailed(len(models))
 		}
 	} else {
-		stats.addSuccess(len(sw.docs))
+		stats.addSuccess(len(models))
 	}
 }
 
